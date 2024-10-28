@@ -11,10 +11,10 @@ initializeApp();
 
 const app = express();
 
-app.use(validateFirebaseIdToken);
-
 app.use(express.json());
 app.use(cors());
+
+app.use(validateFirebaseIdToken);
 
 app.use('/posts', postRoutes)
 
