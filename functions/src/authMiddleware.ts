@@ -39,6 +39,12 @@ const validateFirebaseIdToken = async (req: CustomRequest, res: Response, next: 
     try {
         const decodedIdToken = await admin.auth().verifyIdToken(idToken);
         console.log('ID Token correctly decoded', decodedIdToken);
+
+        if (decodedIdToken.email !== 'khangtrann8198@gmail.com') {
+            res.status(403).send('Unauthorized');
+            return;
+        }
+
         req['user'] = decodedIdToken;
         next();
     } catch (error) {
