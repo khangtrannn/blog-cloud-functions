@@ -1,24 +1,40 @@
 import { Request, Response } from "express";
 import { getFirestore } from "firebase-admin/firestore";
 import { onSchedule } from "firebase-functions/scheduler";
-import { logger, pubsub } from "firebase-functions/v2";
+import { logger } from "firebase-functions/v2";
 const express = require('express');
 const router = express.Router();
 
+const POSTS_COLLECTION = "posts-v2";
+const VERSIONS_COLLECTION = "versions";
+const POSTS_BACKUP_COLLECTION = "posts-v2-backup";
+const VERSIONS_BACKUP_COLLECTION = "versions-backup";
+
 // Function to perform the backup  
 async function backupPosts() {  
-    const postsCollection = await getFirestore().collection('posts');  
-    const backupCollection = await getFirestore().collection('posts-backup');  
+    const postsCollection = await getFirestore().collection(POSTS_COLLECTION);  
+    const postsBackupCollection = await getFirestore().collection(POSTS_BACKUP_COLLECTION);  
+
+    const versionsCollection = await getFirestore().collection(VERSIONS_COLLECTION);
+    const versionsBackupCollection = await getFirestore().collection(VERSIONS_BACKUP_COLLECTION);
 
     try {  
-        const snapshot = await postsCollection.get();  
+        const postsSnapshot = await postsCollection.get();  
+        const versionsSnapshot = await versionsCollection.get();
+
         const batch = await getFirestore().batch();  
 
-        snapshot.forEach(doc => {  
+        postsSnapshot.forEach(doc => {  
             const data = doc.data();  
-            const backupDocRef = backupCollection.doc(doc.id);  
+            const backupDocRef = postsBackupCollection.doc(doc.id);  
             batch.set(backupDocRef, data);  
-        });  
+        });
+
+        versionsSnapshot.forEach(doc => {
+            const data = doc.data();
+            const backupDocRef = versionsBackupCollection.doc(doc.id);
+            batch.set(backupDocRef, data);
+        });
 
         await batch.commit();  
         console.log('Backup completed successfully.');  
@@ -31,7 +47,7 @@ async function backupPosts() {
 
 exports.scheduledBackupPosts = onSchedule("every day 00:00", async () => {
     await backupPosts();
-})
+});
 
 // Route to manually trigger the backup  
 router.post('/backup', async (req: Request, res: Response) => {  
@@ -44,33 +60,63 @@ router.post('/backup', async (req: Request, res: Response) => {
 });  
 
 router.get('/', async (_: Request, res: Response) => {
-    try {
-        const posts = await getFirestore()
-            .collection("posts")
-            .get();
+    try {  
+        const db = getFirestore();  
+        
+        // Get all posts ordered by creation date  
+        const postsSnapshot = await db.collection(POSTS_COLLECTION)  
+            .orderBy("createdAt", "desc")  
+            .get();  
 
-        const postsData = posts.docs.map((doc: FirebaseFirestore.DocumentData) => ({ id: doc.id, ...doc.data() }));
-        res.json(postsData);
-    } catch (error) {
-        logger.error("Error getting posts", error);
-        res.status(500).json({ error: "Internal Server Error" });
+
+        // Combine posts with their active versions  
+        const posts = postsSnapshot.docs.map(doc => {  
+            const postData = doc.data();  
+
+            return {  
+                id: doc.id,  
+                title: postData.title, 
+                createdAt: postData.createdAt.toDate(),  
+                versionId: postData.versionId  
+            };  
+        });  
+
+        res.json(posts);  
+    } catch (error) {  
+        logger.error("Error getting posts", error);  
+        res.status(500).json({ error: "Internal Server Error" });  
     }
 });
 
 router.get('/:id', async (req: Request, res: Response) => {
     try {
         const { id } = req.params;
-        const post = await getFirestore()
-            .collection("posts")
-            .doc(id)
-            .get();
+        const db = getFirestore();
 
-        if (!post.exists) {
-            res.status(404).json({ error: "Post not found" });
-            return;
+        const post = await db.collection(POSTS_COLLECTION).doc(id).get();  
+
+        if (!post.exists) {  
+            res.status(404).json({ error: "⚠️ Post not found" });  
+            return;  
         }
 
-        res.json({ id: post.id, ...post.data() });
+        // Get active version 
+        const activeVersion = await db  
+            .collection("versions")  
+            .doc(post.data()?.versionId)  
+            .get();  
+
+        if (!activeVersion.exists) {  
+            res.status(404).json({ error: "⚠️ Post version not found" });  
+            return;  
+        }
+
+        res.json({  
+            id: post.id,  
+            title: post.data()?.title,  
+            content: activeVersion.data()?.content,  
+            versionId: post.data()?.versionId  
+        });
     } catch (error) {
         logger.error("Error getting post", error);
         res.status(500).json({ error: "Internal Server Error" });
@@ -80,17 +126,23 @@ router.get('/:id', async (req: Request, res: Response) => {
 router.post('/', async (req: Request, res: Response) => {
     try {
         const { title, content } = req.body;
+        const db = getFirestore();
+        const createdAt = new Date();
 
         if (!title) {
-            res.status(400).json({ error: "Title is required." });
+            res.status(400).json({ error: "⚠️ Title is required" });
             return;
         }
 
-        const writeResult = await getFirestore()
-            .collection("posts")
-            .add({ title, content });
+        const versionRef = db.collection(VERSIONS_COLLECTION).doc();
+        await versionRef.set({ content, createdAt });
 
-        res.json({ id: writeResult.id, });
+        const postRef = db.collection(POSTS_COLLECTION).doc();
+        await postRef.set({ title, versionId: versionRef.id, createdAt });
+
+        await versionRef.update({ postId: postRef.id });
+
+        res.json({ id: postRef.id, versionId: versionRef.id });
     } catch (error) {
         logger.error("Error adding post", error);
         res.status(500).json({ error: "Internal Server Error" });
@@ -99,20 +151,39 @@ router.post('/', async (req: Request, res: Response) => {
 
 router.put('/:id', async (req: Request, res: Response) => {
     try {
-        const { title, content } = req.body;
-        const { id } = req.params;
+        const { title, content } = req.body;  
+        const { id } = req.params;  
+        const db = getFirestore();  
 
-        if (!title || !content) {
-            res.status(400).json({ error: "Title and content are required." });
-            return;
-        }
+        if (!content) {  
+            res.status(400).json({ error: "⚠️ Content is required." });  
+            return;  
+        }  
 
-        await getFirestore()
-            .collection("posts")
-            .doc(id)
-            .set({ title, content });
+        const postRef = db.collection(POSTS_COLLECTION).doc(id);  
+        const post = await postRef.get();  
 
-        res.json({ id });
+        if (!post.exists) {  
+            res.status(404).json({ error: "⚠️ Post not found" });  
+            return;  
+        }  
+
+        const versionRef = db.collection(VERSIONS_COLLECTION).doc();  
+        await versionRef.set({  
+            content,  
+            postId: id,  
+            createdAt: new Date()  
+        });
+
+        await postRef.update({
+            versionId: versionRef.id,
+            title,
+        });  
+
+        res.json({  
+            id,  
+            versionId: versionRef.id  
+        });  
     } catch (error) {
         logger.error("Error updating post", error);
         res.status(500).json({ error: "Internal Server Error" });
