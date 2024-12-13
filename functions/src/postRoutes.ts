@@ -111,11 +111,23 @@ router.get('/:id', async (req: Request, res: Response) => {
             return;  
         }
 
+        // Get all versions of the post
+        const versionsSnapshot = await db
+            .collection(VERSIONS_COLLECTION)
+            .where("postId", "==", id)
+            .orderBy("createdAt", "desc")
+            .get();
+
+        const versions = versionsSnapshot.docs.map(doc => ({
+            id: doc.id,
+            createdAt: doc.data().createdAt.toDate()
+        }));
+
         res.json({  
             id: post.id,  
             title: post.data()?.title,  
             content: activeVersion.data()?.content,  
-            versionId: post.data()?.versionId  
+            versions
         });
     } catch (error) {
         logger.error("Error getting post", error);
@@ -145,6 +157,27 @@ router.post('/', async (req: Request, res: Response) => {
         res.json({ id: postRef.id, versionId: versionRef.id });
     } catch (error) {
         logger.error("Error adding post", error);
+        res.status(500).json({ error: "Internal Server Error" });
+    }
+});
+
+router.get('/versions/:versionId', async (req: Request, res: Response) => {
+    try {
+        const { versionId } = req.params;
+        const db = getFirestore();
+
+        // Get specific version
+        const version = await db.collection(VERSIONS_COLLECTION).doc(versionId).get();
+        if (!version.exists) {
+            res.status(404).json({ error: "⚠️ Version not found" });
+            return;
+        }
+
+        res.json({
+            ...version.data(),
+        });
+    } catch (error) {
+        logger.error("Error getting post version", error);
         res.status(500).json({ error: "Internal Server Error" });
     }
 });
