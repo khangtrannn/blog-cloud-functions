@@ -223,4 +223,39 @@ router.put('/:id', async (req: Request, res: Response) => {
     }
 });
 
+router.delete('/:id', async (req: Request, res: Response) => {
+    try {
+        const { id } = req.params;
+        const db = getFirestore();
+
+        const postRef = db.collection(POSTS_COLLECTION).doc(id);
+        const post = await postRef.get();
+
+        if (!post.exists) {
+            res.status(404).json({ error: "⚠️ Post not found" });
+            return;
+        }
+
+        // Delete all versions associated with the post
+        const versionsSnapshot = await db.collection(VERSIONS_COLLECTION)
+            .where("postId", "==", id)
+            .get();
+
+        const batch = db.batch();
+        versionsSnapshot.forEach(doc => {
+            batch.delete(doc.ref);
+        });
+
+        // Delete the post
+        batch.delete(postRef);
+
+        await batch.commit();
+
+        res.json({ message: "Post and its versions deleted successfully." });
+    } catch (error) {
+        logger.error("Error deleting post", error);
+        res.status(500).json({ error: "Internal Server Error" });
+    }
+});
+
 module.exports = router;
