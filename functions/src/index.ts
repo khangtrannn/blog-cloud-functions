@@ -1,6 +1,5 @@
 import { getFirestore } from "firebase-admin/firestore";
 import validateFirebaseIdToken from "./authMiddleware";
-import { logger } from "firebase-functions/v2";
 
 const { onRequest } = require("firebase-functions/v2/https");
 const { initializeApp } = require("firebase-admin/app");
@@ -18,7 +17,8 @@ app.use(cors());
 
 app.use(validateFirebaseIdToken);
 
-app.use('/posts', postRoutes)
+app.use('/posts', postRoutes);
+app.use('/containers', require('./containerRoutes'));
 
 export async function migrate() {
     try {
@@ -59,8 +59,9 @@ export async function migrate() {
                 title: post.title,
                 content: post.content || "",
                 createdAt: post.createdAt,
-                container: null,
-                domain: "Inbox",
+                parentContainer: "Us5O53dOxqIYTG972UZM",
+                domain: "Archive",
+                isContainer: false,
             });
         }
         );
@@ -71,73 +72,5 @@ export async function migrate() {
         console.error("Error migrating posts: ", error);
     }
 }
-
-export async function migrateSecondBrain() {
-    try {
-            const db = getFirestore();
-            const postsSnapshot = await db.collection('post-v3').select("title", "container", "domain").orderBy("createdAt", "desc").get();
-            const posts = postsSnapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }) as any);
-            const secondBrainSnapshot = await db.collection("second-brain").get();
-            const secondBrain = secondBrainSnapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }) as any);
-    
-            const data = [
-                {
-                    container: "Inbox",
-                    title: "Inbox",
-                    children: posts.filter(post => post.domain === 'Inbox'),
-                },
-                {
-                    container: "Projects",
-                    title: "Projects",
-                    childern: secondBrain.filter(doc => doc.domain === "Project").map((doc) => {
-                        return {
-                            title: doc.title,
-                            children: posts.filter(post => post.container === doc.id),
-                        }
-                    }),
-                },
-                {
-                    container: "Areas",
-                    title: "Areas",
-                    children: secondBrain.filter(doc => doc.domain === "Area").map((doc) => {
-                        return {
-                            title: doc.title,
-                            children: posts.filter(post => post.container === doc.id),
-                        }
-                    }),
-                },
-                {
-                    container: "Resources",
-                    title: "Resources",
-                    children: secondBrain.filter(doc => doc.domain === "Resource").map((doc) => {
-                        return {
-                            title: doc.title,
-                            children: posts.filter(post => post.container === doc.id),
-                        }
-                    }),
-                },
-                {
-                    container: "Archive",
-                    title: "Archive",
-                    children: posts.filter(post => post.container === 'Archive'),
-                },
-            ]
-    
-            console.log("Data: ", data);
-            
-        } catch (error) {
-            logger.error("Error getting posts", error);
-        }
-}
-
-// setTimeout(() => {
-//     console.log("Migrating posts...");
-//     migrate();
-// }, 3000);
-
-setTimeout(() => {
-    migrateSecondBrain();
-}, 3000);
-
 
 exports.blog = onRequest(app);
