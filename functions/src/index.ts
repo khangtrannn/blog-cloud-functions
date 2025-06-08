@@ -1,5 +1,6 @@
 import { getFirestore } from "firebase-admin/firestore";
-import validateFirebaseIdToken from "./authMiddleware";
+// import validateFirebaseIdToken from "./authMiddleware";
+import { dailyBackup } from './backup';
 
 const { onRequest } = require("firebase-functions/v2/https");
 const { initializeApp } = require("firebase-admin/app");
@@ -9,13 +10,14 @@ const express = require('express');
 const postRoutes = require('./postRoutes');
 
 initializeApp();
+getFirestore().settings({ ignoreUndefinedProperties: true });
 
 const app = express();
 
 app.use(express.json());
 app.use(cors());
 
-app.use(validateFirebaseIdToken);
+// app.use(validateFirebaseIdToken);
 
 app.use('/posts', postRoutes);
 app.use('/containers', require('./containerRoutes'));
@@ -48,8 +50,6 @@ export async function migrate() {
             };
         });
 
-        console.log("Posts: ", posts);
-
         // save posts to second-brain collection
         const secondBrainRef = db.collection("post-v3");
         const batch = db.batch();
@@ -74,3 +74,4 @@ export async function migrate() {
 }
 
 exports.blog = onRequest(app);
+exports.dailyBackup = dailyBackup;
